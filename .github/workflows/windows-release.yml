@@ -1,0 +1,69 @@
+name: Windows Build and Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: Configure (Release x64)
+        run: cmake --preset ninja-release-x64
+
+      - name: Build (Release x64)
+        run: cmake --build --preset ninja-build-release-x64 --parallel
+
+      - name: Package binaries
+        shell: pwsh
+        run: |
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "${{ github.sha }}".Substring(0, 7) }
+          $packageName = "dolphin-windows-x64-$version.zip"
+          $binariesPath = Join-Path $PWD "build/release/x64/Binaries"
+
+          if (-not (Test-Path $binariesPath)) {
+            throw "Expected binaries directory not found: $binariesPath"
+          }
+
+          Compress-Archive -Path "$binariesPath/*" -DestinationPath $packageName -Force
+          "PACKAGE_NAME=$packageName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-build
+          path: ${{ env.PACKAGE_NAME }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build-windows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-build
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.zip"
+          generate_release_notes: true
